@@ -31,6 +31,8 @@ class CertificateController extends Controller
         'masa_berlaku',
         'file_path',
         'hash_sha256',
+        'can_edit',
+        'can_delete',
         'history_notes',
     ];
 
@@ -236,6 +238,11 @@ class CertificateController extends Controller
     private function serializeAdminCertificate(Certificate $certificate): array
     {
         $data = $this->serializePublicCertificate($certificate);
+        $user = auth()->user();
+
+        $data['can_edit'] = $user?->isSuperAdmin()
+            || ($user?->isAdmin() && (int) $certificate->created_by === (int) $user->id);
+        $data['can_delete'] = (bool) $user?->isSuperAdmin();
         $data['history_notes'] = $this->serializeHistoryNotes($certificate);
 
         return array_intersect_key($data, array_flip(self::ADMIN_CERTIFICATE_FIELDS));

@@ -8,6 +8,12 @@
  *
  * HTTP 0   = Koneksi ditolak / server tidak merespons = AMAN
  * HTTP 419 = CSRF Protection aktif = AMAN
+ *
+ * Catatan penjelasan:
+ * - Script ini menguji beberapa kategori OWASP Top 10 2021 yang relevan dengan sistem.
+ * - Setiap skenario mengirim request atau payload tertentu ke aplikasi, lalu memeriksa
+ *   apakah respons sistem aman, misalnya redirect, forbidden, validasi gagal, atau tidak bocor data.
+ * - Output BERHASIL/GAGAL berasal dari hasil pengecekan respons dan database, bukan dari teks statis.
  */
 
 require __DIR__ . '/vendor/autoload.php';
@@ -37,6 +43,8 @@ function httpGet(string $url, string $cookies = ''): array
 // ── Helper: Ambil fresh CSRF token + session ──────────────────
 function freshCsrf(string $baseUrl): array
 {
+    // CSRF token diambil langsung dari halaman login.
+    // Ini membuat request POST menyerupai alur pengguna nyata dan tetap melewati proteksi Laravel.
     $jar = tempnam(sys_get_temp_dir(), 'owasp_cookie_');
     $ch = curl_init("{$baseUrl}/login");
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
@@ -82,6 +90,8 @@ function httpPost(string $baseUrl, string $path, array $data): array
 // ── Helper: Cek tidak ada kebocoran data SQL ──────────────────
 function noDataLeak(array $res): bool
 {
+    // Fungsi ini memastikan respons aplikasi tidak membocorkan detail database atau error internal.
+    // Jika ada kata seperti SQLSTATE atau stack trace, skenario dianggap tidak aman.
     $dangerous = ['syntax error', 'mysql_', 'sqlite_', 'ORA-', 'pg_query', 'SQLSTATE', 'stack trace'];
     foreach ($dangerous as $kw) {
         if (stripos($res['response'], $kw) !== false) return false;
@@ -110,6 +120,8 @@ function httpDesc(int $code): string
 // HTTP 422 = Validasi Laravel menolak = AMAN
 function isBlocked(int $code): bool
 {
+    // Untuk skenario serangan, status berikut dianggap aman karena request tidak diproses normal.
+    // 0 = koneksi/CSRF gagal, 419 = CSRF aktif, 422 = validasi input Laravel menolak.
     return in_array($code, [0, 419, 422]);
 }
 
@@ -119,6 +131,9 @@ $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 
 function ensureOwaspSecurityFixtures(PDO $pdo, string $baseUrl): void
 {
+    // Fixture OWASP membuat data uji yang konsisten:
+    // akun, mahasiswa, sertifikat, hash SHA-256, digital signature, dan QR Code.
+    // Dengan data yang sama, pengujian bisa diulang dan hasilnya dapat dibandingkan.
     $users = [
         ['name' => 'Security Superadmin', 'email' => 'security.superadmin@example.com', 'role' => 'superadmin'],
         ['name' => 'Security Admin', 'email' => 'security.admin@example.com', 'role' => 'admin'],
@@ -201,6 +216,9 @@ $no = 1;
 echo "\n\n[A01] Broken Access Control\n";
 echo str_repeat('-', 65);
 
+// Tujuan A01:
+// memastikan halaman yang dilindungi tidak bisa dibuka tanpa login.
+// Jika sistem mengembalikan 302 ke login atau 403 Forbidden, akses dianggap berhasil diblokir.
 $protectedUrls = [
     '/admin'                     => 'Dashboard Admin',
     '/admin/upload'              => 'Upload Sertifikat',
@@ -231,6 +249,10 @@ foreach ($protectedUrls as $path => $label) {
 echo "\n\n[A02] Cryptographic Failures\n";
 echo str_repeat('-', 65);
 
+// Tujuan A02:
+// memastikan data sensitif tidak disimpan secara lemah.
+// Password harus bcrypt, hash sertifikat harus SHA-256 64 karakter hex,
+// dan digital signature harus berbentuk hash yang valid.
 // Bcrypt password
 $stmt      = $pdo->query("SELECT password FROM users LIMIT 5");
 $users     = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -294,6 +316,10 @@ $no++;
 echo "\n\n[A03] Injection — SQL Injection\n";
 echo str_repeat('-', 65);
 
+// Tujuan A03:
+// mengirim payload SQL Injection ke form verifikasi dan login.
+// Skenario lolos jika payload tidak membuka akses, tidak memunculkan data tidak sah,
+// dan tidak membocorkan error database.
 $sqlPayloads = [
     "' OR 1=1 --",
     "'; DROP TABLE users; --",
@@ -345,6 +371,9 @@ foreach ($loginSqlPayloads as $payload) {
 echo "\n\n[A07] Identification and Authentication Failures\n";
 echo str_repeat('-', 65);
 
+// Tujuan A07:
+// memeriksa apakah autentikasi tetap aman saat diberi percobaan login berulang,
+// field kosong, atau session yang tidak valid/kadaluarsa.
 // Brute force login
 $failCount = 0;
 $blocked   = false;
@@ -402,6 +431,10 @@ $no++;
 echo "\n\n[A08] Software and Data Integrity Failures\n";
 echo str_repeat('-', 65);
 
+// Tujuan A08:
+// memastikan data sertifikat tidak berubah tanpa terdeteksi.
+// File asli harus cocok dengan hash database, sedangkan file yang dimanipulasi
+// harus menghasilkan hash berbeda dan dianggap tidak valid.
 $stmt = $pdo->query("SELECT certificate_number, file_path, hash_sha256 FROM certificates WHERE hash_sha256 IS NOT NULL LIMIT 1");
 $cert = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -466,6 +499,8 @@ $success = count(array_filter($results, fn($r) => $r['passed']));
 $failed  = $total - $success;
 $percent = round(($success / $total) * 100, 1);
 
+// Rekap OWASP dihitung dari seluruh elemen $results.
+// Dengan demikian total berhasil/gagal mengikuti hasil setiap payload dan respons aplikasi.
 $statusLabel = $percent === 100.0
     ? "\033[32mSANGAT AMAN\033[0m"
     : ($percent >= 75 ? "\033[33mAMAN\033[0m" : "\033[31mPERLU PERBAIKAN\033[0m");

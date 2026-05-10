@@ -5,6 +5,12 @@
  *
  * Jalankan: php artisan serve  (terminal 1)
  *           php -d opcache.enable_cli=0 test_security_testing.php  (terminal 2)
+ *
+ * Catatan penjelasan:
+ * - Script ini melakukan simulasi langsung ke aplikasi melalui HTTP request dan database fixture.
+ * - Hasil BERHASIL/GAGAL berasal dari respons sistem, perbandingan hash, validasi QR,
+ *   pembatasan akses role, dan penolakan session yang dimanipulasi.
+ * - Jika sistem menerima file/QR/session yang seharusnya ditolak, skenario akan GAGAL.
  */
 
 require __DIR__ . '/vendor/autoload.php';
@@ -21,6 +27,9 @@ $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 
 function ensureSecurityFixtures(PDO $pdo, string $baseUrl): void
 {
+    // Fixture adalah data uji yang dibuat stabil agar pengujian bisa diulang.
+    // Akun, mahasiswa, sertifikat, hash SHA-256, signature, dan QR dibuat/diperbarui
+    // sebelum skenario dijalankan. Dengan begitu hasil tidak bergantung pada data acak.
     $users = [
         ['name' => 'Security Superadmin', 'email' => 'security.superadmin@example.com', 'role' => 'superadmin'],
         ['name' => 'Security Admin', 'email' => 'security.admin@example.com', 'role' => 'admin'],
@@ -161,6 +170,9 @@ function postFileWithJar(string $url, string $jar, array $fields): array
 // ── Helper: Buat session baru + ambil CSRF ────────────────────
 function newSession(string $baseUrl): array
 {
+    // Laravel melindungi form dengan CSRF token.
+    // Script mengambil halaman login terlebih dahulu untuk memperoleh token valid,
+    // lalu token tersebut digunakan pada request POST berikutnya.
     $jar = makeJar();
     $res = getWithJar("{$baseUrl}/login", $jar);
     preg_match('/<meta name="csrf-token" content="([^"]+)"/', $res['response'], $tm);
@@ -215,6 +227,9 @@ function httpPostFile(string $baseUrl, string $path, string $filePath, string $f
 // ── Helper: Login dan kembalikan jar yang sudah terautentikasi
 function loginAs(string $baseUrl, string $email, string $password): string
 {
+    // Fungsi ini membuat sesi login nyata menggunakan email dan password uji.
+    // Cookie session yang dikembalikan dipakai untuk membuktikan apakah role tertentu
+    // diizinkan atau ditolak saat mengakses halaman admin.
     $s = newSession($baseUrl);
     if (empty($s['token'])) {
         @unlink($s['jar']);
@@ -231,6 +246,9 @@ function loginAs(string $baseUrl, string $email, string $password): string
 // ── Helper: Apakah serangan diblokir ─────────────────────────
 function isBlocked(int $code): bool
 {
+    // Respons berikut dianggap aman untuk skenario serangan:
+    // 0 = request gagal/CSRF gagal, 302 = redirect, 403 = forbidden,
+    // 419 = CSRF tidak valid, 422 = validasi input gagal.
     return in_array($code, [0, 302, 403, 419, 422]);
 }
 
@@ -259,6 +277,10 @@ $no = 1;
 echo "\n\n[BAGIAN 1] Uji Integritas Dokumen SHA-256\n";
 echo str_repeat('-', 65);
 
+// Prinsip uji integritas:
+// file asli harus menghasilkan hash yang sama dengan database,
+// sedangkan file yang diubah harus menghasilkan hash berbeda.
+// Ini menunjukkan SHA-256 mendeteksi perubahan isi dokumen.
 $stmt = $pdo->query("SELECT certificate_number, file_path, hash_sha256 FROM certificates WHERE hash_sha256 IS NOT NULL LIMIT 1");
 $cert = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -325,6 +347,9 @@ if ($cert) {
 echo "\n\n[BAGIAN 2] Uji Pemalsuan QR Code\n";
 echo str_repeat('-', 65);
 
+// Prinsip uji QR:
+// QR asli harus diterima karena berisi data sertifikat yang tersimpan,
+// sedangkan QR rusak/palsu/nomor acak harus ditolak atau tidak menampilkan data valid.
 $stmt   = $pdo->query("SELECT certificate_number, qr_code FROM certificates WHERE qr_code IS NOT NULL LIMIT 1");
 $qrCert = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -387,6 +412,9 @@ $no++;
 echo "\n\n[BAGIAN 3] Uji Kontrol Akses RBAC\n";
 echo str_repeat('-', 65);
 
+// Prinsip uji RBAC:
+// role yang berwenang harus bisa mengakses halaman sesuai haknya,
+// sedangkan role yang tidak berwenang harus ditolak atau diarahkan ulang.
 $superadminEmail = $accounts['superadmin'] ?? null;
 $adminEmail      = $accounts['admin']      ?? null;
 
@@ -453,6 +481,9 @@ $no++;
 echo "\n\n[BAGIAN 4] Uji Manipulasi Session\n";
 echo str_repeat('-', 65);
 
+// Prinsip uji session:
+// cookie/session palsu tidak boleh dianggap sebagai login valid.
+// Jika session palsu dapat membuka halaman admin, maka skenario ini harus gagal.
 $manipulations = [
     ['cookie' => 'laravel_session=FAKE_SESSION_SUPERADMIN_ROLE', 'path' => '/admin/users'],
     ['cookie' => 'laravel_session=FAKE; role=superadmin',        'path' => '/admin/activity-logs'],
@@ -490,6 +521,9 @@ $success = count(array_filter($results, fn($r) => $r['passed']));
 $failed  = $total - $success;
 $percent = round(($success / $total) * 100, 1);
 
+// Rekap akhir dihitung dari array $results.
+// Angka keberhasilan bukan diketik manual, tetapi merupakan akumulasi status
+// dari setiap skenario yang sudah dijalankan sebelumnya.
 $statusLabel = $percent === 100.0
     ? "\033[32mSANGAT AMAN\033[0m"
     : ($percent >= 75 ? "\033[33mAMAN\033[0m" : "\033[31mPERLU PERBAIKAN\033[0m");

@@ -35,6 +35,10 @@ class AppServiceProvider extends ServiceProvider
             return Limit::perMinute(10)->by($request->ip());
         });
 
+        RateLimiter::for('verify-qr-frame', function (Request $request) {
+            return Limit::perMinute(90)->by($request->ip());
+        });
+
         Blade::directive('cspNonce', function () {
             return "<?php echo request()->attributes->get('csp_nonce', ''); ?>";
         });

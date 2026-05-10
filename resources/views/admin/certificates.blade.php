@@ -114,7 +114,7 @@
                     <h1 class="mt-4 text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">Daftar Sertifikat</h1>
                     <p class="mt-3 max-w-xl text-sm leading-6 text-slate-500 sm:text-[15px]">Kelola pencarian, penyaringan, dan peninjauan seluruh data sertifikat dari satu halaman kerja.</p>
                 </div>
-                @if(auth()->user()->isAdmin())
+                @if(auth()->user()->isSuperAdmin() || auth()->user()->isAdmin())
                 <div class="flex items-center">
                     <a href="{{ route('admin.upload') }}" class="inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white shadow-sm shadow-blue-200 transition hover:bg-blue-700">
                         <i class="bi bi-upload"></i>
@@ -129,7 +129,9 @@
             <div class="border-b border-slate-100 p-6 flex justify-between items-center">
                 <div>
                     <h2 id="certificatesTotal" class="text-xl font-bold text-slate-900">Total: {{ $certificates->total() }} Sertifikat</h2>
-                    <p class="mt-1 text-xs text-slate-400">Anda hanya dapat mengedit sertifikat milik Anda sendiri.</p>
+                    <p class="mt-1 text-xs text-slate-400">
+                        {{ auth()->user()->isSuperAdmin() ? 'SuperAdmin dapat mengelola seluruh sertifikat.' : 'Admin hanya dapat mengedit sertifikat yang diupload sendiri.' }}
+                    </p>
                 </div>
             </div>
 

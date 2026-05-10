@@ -390,4 +390,47 @@ class SertifikatTest extends TestCase
             ->get(route('admin.certificates.edit', $cert))
             ->assertStatus(403);
     }
+
+    public function test_admin_update_sertifikat_admin_lain_ditolak(): void
+    {
+        $admin = $this->buatAdmin();
+        $adminLain = $this->buatAdminLain();
+        $cert = $this->buatSertifikat($adminLain, 'CERT-LAIN');
+
+        $this->actingAs($admin)
+            ->put(route('admin.certificates.update', $cert), [
+                'nama'             => 'Budi Diubah Paksa',
+                'npm'              => '11111111',
+                'nomor_sertifikat' => 'CERT-LAIN',
+                'jenis_sertifikat' => 'Pelatihan',
+            ])
+            ->assertStatus(403);
+    }
+
+    public function test_superadmin_dapat_edit_sertifikat_admin_lain(): void
+    {
+        $superadmin = $this->buatAdmin('superadmin');
+        $adminLain = $this->buatAdminLain();
+        $cert = $this->buatSertifikat($adminLain, 'CERT-LAIN');
+
+        $this->actingAs($superadmin)
+            ->get(route('admin.certificates.edit', $cert))
+            ->assertOk();
+
+        $this->actingAs($superadmin)
+            ->put(route('admin.certificates.update', $cert), [
+                'nama'             => 'Budi Superadmin',
+                'npm'              => '11111111',
+                'nomor_sertifikat' => 'CERT-LAIN',
+                'jenis_sertifikat' => 'Pelatihan Superadmin',
+            ])
+            ->assertRedirect(route('admin.certificates'));
+
+        $this->assertDatabaseHas('certificates', [
+            'id' => $cert->id,
+            'certificate_type' => 'Pelatihan Superadmin',
+            'created_by' => $adminLain->id,
+        ]);
+        $this->assertDatabaseHas('activity_logs', ['action' => 'edit', 'target' => 'CERT-LAIN']);
+    }
 }

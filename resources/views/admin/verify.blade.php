@@ -73,9 +73,17 @@
                         <div id="scanIdle" class="flex flex-col items-center justify-center h-64 px-6 text-center">
                             <p class="text-gray-500">Klik tombol di bawah untuk mulai scan.</p>
                         </div>
-                        <video id="scanVideo" class="hidden w-full" autoplay playsinline></video>
+                        <video id="scanVideo" class="hidden w-full" autoplay playsinline muted></video>
+                    </div>
+                    <div class="mx-auto max-w-md text-left">
+                        <label for="cameraSelect" class="mb-2 block text-sm font-semibold text-slate-700">Pilih Kamera</label>
+                        <select id="cameraSelect" class="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-700 focus:ring-2 focus:ring-blue-500">
+                            <option value="">Kamera otomatis</option>
+                        </select>
+                        <p id="cameraHint" class="mt-2 text-xs text-slate-400">Hubungkan kamera eksternal, izinkan akses kamera, lalu pilih perangkat yang tersedia.</p>
                     </div>
                     <button type="button" id="btnStartScan" class="rounded-xl bg-blue-600 px-6 py-2.5 font-semibold text-white hover:bg-blue-700">Mulai Scan Kamera</button>
+                    <button type="button" id="btnFocusCamera" class="hidden rounded-xl bg-blue-50 px-6 py-2.5 font-semibold text-blue-700 ring-1 ring-blue-100 hover:bg-blue-100">Fokus</button>
                     <button type="button" id="btnStopScan" class="hidden rounded-xl bg-red-500 px-6 py-2.5 font-semibold text-white hover:bg-red-600">Stop</button>
                 </div>
             </div>
@@ -120,9 +128,22 @@ document.querySelectorAll('[data-tab]').forEach((button) => {
 
 document.getElementById('verifyManualBtn')?.addEventListener('click', () => verifyManual());
 document.getElementById('btnStartScan')?.addEventListener('click', () => startScan());
+document.getElementById('btnFocusCamera')?.addEventListener('click', () => focusCamera());
 document.getElementById('btnStopScan')?.addEventListener('click', () => stopScan());
 document.getElementById('clearUploadBtn')?.addEventListener('click', (event) => clearUpload(event));
 document.getElementById('submitUploadBtn')?.addEventListener('click', (event) => submitUpload(event));
+
+const cameraSelect = document.getElementById('cameraSelect');
+const cameraHint = document.getElementById('cameraHint');
+
+cameraSelect?.addEventListener('change', () => {
+    if (scanStream) startScan();
+});
+
+if (navigator.mediaDevices?.enumerateDevices) {
+    loadCameraDevices();
+    navigator.mediaDevices.addEventListener?.('devicechange', () => loadCameraDevices());
+}
 
 function switchTab(tab) {
     document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
@@ -159,41 +180,345 @@ document.getElementById('cert_number').addEventListener('keydown', function (e) 
     if (e.key === 'Enter') verifyManual();
 });
 
-let scanStream = null, scanInterval = null;
+let scanStream = null, scanInterval = null, scanCanvas = null, scanRequestBusy = false, scanDetectorBusy = false, scanFrameIndex = 0, scanSession = 0;
+
+async function loadCameraDevices() {
+    if (!navigator.mediaDevices?.enumerateDevices || !cameraSelect) return [];
+
+    try {
+        const previousValue = cameraSelect.value;
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const cameras = devices.filter(device => device.kind === 'videoinput');
+
+        cameraSelect.innerHTML = '<option value="">Kamera otomatis</option>';
+        cameras.forEach((camera, index) => {
+            const option = document.createElement('option');
+            option.value = camera.deviceId;
+            option.textContent = camera.label || `Kamera ${index + 1}`;
+            cameraSelect.appendChild(option);
+        });
+
+        if (previousValue && cameras.some(camera => camera.deviceId === previousValue)) {
+            cameraSelect.value = previousValue;
+        }
+
+        cameraSelect.disabled = cameras.length === 0;
+        if (cameraHint) {
+            cameraHint.textContent = cameras.length > 0
+                ? 'Jika kamera eksternal belum muncul, cabut-pasang kamera lalu izinkan akses kamera lagi.'
+                : 'Tidak ada perangkat kamera yang terdeteksi.';
+        }
+
+        return cameras;
+    } catch (err) {
+        if (cameraHint) cameraHint.textContent = 'Daftar kamera belum dapat dibaca. Izinkan akses kamera terlebih dahulu.';
+        return [];
+    }
+}
+
+function cameraVideoConstraints(extra = {}) {
+    return {
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+        frameRate: { ideal: 30, max: 60 },
+        ...extra
+    };
+}
+
+async function openCameraStream() {
+    if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error('MEDIA_DEVICES_UNSUPPORTED');
+    }
+
+    const selectedDeviceId = cameraSelect?.value;
+    if (selectedDeviceId) {
+        try {
+            return await navigator.mediaDevices.getUserMedia({
+                video: cameraVideoConstraints({ deviceId: { exact: selectedDeviceId } }),
+                audio: false
+            });
+        } catch (err) {
+            return navigator.mediaDevices.getUserMedia({
+                video: { deviceId: { exact: selectedDeviceId } },
+                audio: false
+            });
+        }
+    }
+
+    try {
+        return await navigator.mediaDevices.getUserMedia({
+            video: cameraVideoConstraints({ facingMode: { ideal: 'environment' } }),
+            audio: false
+        });
+    } catch (err) {
+        try {
+            return await navigator.mediaDevices.getUserMedia({
+                video: cameraVideoConstraints(),
+                audio: false
+            });
+        } catch (fallbackErr) {
+            return navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        }
+    }
+}
+
+async function enhanceCameraTrack(stream) {
+    const track = stream?.getVideoTracks?.()[0];
+    const capabilities = track?.getCapabilities?.();
+    if (!track || !capabilities) return;
+
+    const advanced = [];
+    if (Array.isArray(capabilities.focusMode) && capabilities.focusMode.includes('continuous')) {
+        advanced.push({ focusMode: 'continuous' });
+    }
+    if (Array.isArray(capabilities.exposureMode) && capabilities.exposureMode.includes('continuous')) {
+        advanced.push({ exposureMode: 'continuous' });
+    }
+
+    if (advanced.length > 0) {
+        try {
+            await track.applyConstraints({ advanced });
+        } catch (_) {}
+    }
+}
+
+function syncActiveCamera(stream) {
+    const activeDeviceId = stream?.getVideoTracks?.()[0]?.getSettings?.().deviceId;
+    if (activeDeviceId && cameraSelect) {
+        cameraSelect.value = activeDeviceId;
+    }
+}
+
+function cameraErrorMessage(error) {
+    if (error?.message === 'MEDIA_DEVICES_UNSUPPORTED') {
+        return 'Browser tidak mendukung akses kamera. Gunakan tab Upload Gambar.';
+    }
+
+    if (error?.name === 'NotAllowedError' || error?.name === 'SecurityError') {
+        return 'Izin kamera ditolak. Izinkan akses kamera pada browser lalu coba lagi.';
+    }
+
+    if (error?.name === 'NotFoundError' || error?.name === 'DevicesNotFoundError') {
+        return 'Kamera tidak ditemukan. Pastikan kamera eksternal sudah terhubung.';
+    }
+
+    if (error?.name === 'NotReadableError' || error?.name === 'TrackStartError') {
+        return 'Kamera sedang digunakan aplikasi lain. Tutup aplikasi tersebut lalu coba lagi.';
+    }
+
+    if (error?.name === 'OverconstrainedError' || error?.name === 'ConstraintNotSatisfiedError') {
+        return 'Kamera yang dipilih tidak tersedia. Pilih kamera lain lalu mulai scan kembali.';
+    }
+
+    return 'Tidak dapat mengakses kamera.';
+}
+
+function updateCameraHint(message) {
+    if (cameraHint) cameraHint.textContent = message;
+}
+
+async function focusCamera() {
+    const track = scanStream?.getVideoTracks?.()[0];
+    if (!track) {
+        updateCameraHint('Aktifkan kamera terlebih dahulu sebelum menggunakan fokus.');
+        return;
+    }
+
+    const capabilities = track.getCapabilities?.() || {};
+    const focusModes = Array.isArray(capabilities.focusMode) ? capabilities.focusMode : [];
+
+    if (focusModes.includes('single-shot')) {
+        try {
+            await track.applyConstraints({ advanced: [{ focusMode: 'single-shot' }] });
+            updateCameraHint('Fokus kamera dijalankan. Tahan QR tetap di tengah kamera.');
+
+            if (focusModes.includes('continuous')) {
+                setTimeout(() => {
+                    track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
+                }, 900);
+            }
+            return;
+        } catch (_) {}
+    }
+
+    if (focusModes.includes('continuous')) {
+        try {
+            await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
+            updateCameraHint('Fokus otomatis aktif. Tahan QR tetap di tengah kamera.');
+            return;
+        } catch (_) {}
+    }
+
+    updateCameraHint('Kamera/browser ini belum mendukung tombol fokus. Coba dekatkan atau jauhkan QR perlahan sampai tajam.');
+}
+
+function isTransientQrMessage(message) {
+    return !message
+        || message.includes('tidak dapat dibaca')
+        || message.includes('gagal diproses');
+}
+
+function captureVideoFrame(video, mode = 'full') {
+    const sourceWidth = video.videoWidth;
+    const sourceHeight = video.videoHeight;
+    if (!sourceWidth || !sourceHeight) return Promise.resolve(null);
+
+    let sourceX = 0;
+    let sourceY = 0;
+    let captureWidth = sourceWidth;
+    let captureHeight = sourceHeight;
+
+    if (mode === 'center') {
+        const cropSize = Math.round(Math.min(sourceWidth, sourceHeight) * 0.82);
+        sourceX = Math.round((sourceWidth - cropSize) / 2);
+        sourceY = Math.round((sourceHeight - cropSize) / 2);
+        captureWidth = cropSize;
+        captureHeight = cropSize;
+    }
+
+    const maxDimension = mode === 'center' ? 1150 : 1400;
+    const scale = Math.min(1, maxDimension / Math.max(captureWidth, captureHeight));
+    const targetWidth = Math.round(captureWidth * scale);
+    const targetHeight = Math.round(captureHeight * scale);
+
+    scanCanvas = scanCanvas || document.createElement('canvas');
+    scanCanvas.width = targetWidth;
+    scanCanvas.height = targetHeight;
+    scanCanvas.getContext('2d').drawImage(video, sourceX, sourceY, captureWidth, captureHeight, 0, 0, targetWidth, targetHeight);
+
+    return new Promise(resolve => scanCanvas.toBlob(resolve, 'image/jpeg', 0.95));
+}
+
+async function scanFrameWithServer(video, sessionId, endpoint) {
+    if (scanRequestBusy || sessionId !== scanSession || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
+
+    scanRequestBusy = true;
+
+    try {
+        const frameMode = scanFrameIndex % 2 === 0 ? 'center' : 'full';
+        scanFrameIndex += 1;
+
+        const blob = await captureVideoFrame(video, frameMode);
+        if (!blob) return;
+
+        const formData = new FormData();
+        formData.append('qr_image', blob, 'kamera.jpg');
+
+        const res = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'X-CSRF-TOKEN': CSRF },
+            body: formData
+        });
+
+        if (sessionId !== scanSession) return;
+
+        if (res.status === 429) {
+            updateCameraHint('Pemindaian terlalu cepat. Tahan posisi QR sebentar lalu coba lagi.');
+            return;
+        }
+
+        const data = await res.json();
+        if (data.success) {
+            stopScan();
+            showSuccess(data.data);
+            return;
+        }
+
+        if (isTransientQrMessage(data.message || '')) {
+            updateCameraHint('Mencari QR... Pastikan QR terlihat jelas dan tidak terlalu jauh dari kamera.');
+            return;
+        }
+
+        stopScan();
+        showError(data.message || 'Format QR tidak valid.');
+    } catch (err) {
+        if (sessionId === scanSession) {
+            updateCameraHint('Belum dapat membaca frame kamera. Pastikan koneksi aplikasi tetap aktif.');
+        }
+    } finally {
+        if (sessionId === scanSession) {
+            scanRequestBusy = false;
+        }
+    }
+}
+
+function startServerFrameScanner(video, sessionId, endpoint) {
+    scanFrameIndex = 0;
+    updateCameraHint('Mode kompatibel aktif. Posisikan QR di tengah kamera dan tahan sebentar.');
+    scanFrameWithServer(video, sessionId, endpoint);
+    scanInterval = setInterval(() => scanFrameWithServer(video, sessionId, endpoint), 1200);
+}
 
 async function startScan() {
+    stopScan();
+    const sessionId = scanSession;
+    const frameEndpoint = '{{ route("admin.verify.qr") }}';
+
     try {
-        scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+        scanStream = await openCameraStream();
+        await enhanceCameraTrack(scanStream);
+        await loadCameraDevices();
+        syncActiveCamera(scanStream);
+
         const video = document.getElementById('scanVideo');
         video.srcObject = scanStream;
         video.classList.remove('hidden');
+        await video.play();
+
         document.getElementById('scanIdle').classList.add('hidden');
         document.getElementById('btnStartScan').classList.add('hidden');
+        document.getElementById('btnFocusCamera').classList.remove('hidden');
         document.getElementById('btnStopScan').classList.remove('hidden');
+
         if ('BarcodeDetector' in window) {
-            const detector = new BarcodeDetector({ formats: ['qr_code'] });
-            scanInterval = setInterval(async () => {
-                try {
-                    const codes = await detector.detect(video);
-                    if (codes.length > 0) { stopScan(); handleQrText(codes[0].rawValue); }
-                } catch (_) {}
-            }, 500);
-        } else {
-            showError('Browser tidak mendukung BarcodeDetector. Gunakan tab Upload Gambar.');
-            stopScan();
+            try {
+                const detector = new BarcodeDetector({ formats: ['qr_code'] });
+                updateCameraHint('Kamera aktif. Arahkan QR ke area kamera.');
+                scanInterval = setInterval(async () => {
+                    if (scanDetectorBusy || sessionId !== scanSession || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
+                    scanDetectorBusy = true;
+                    try {
+                        const codes = await detector.detect(video);
+                        if (codes.length > 0) { stopScan(); handleQrText(codes[0].rawValue); }
+                    } catch (_) {
+                        if (sessionId === scanSession) {
+                            if (scanInterval) { clearInterval(scanInterval); scanInterval = null; }
+                            startServerFrameScanner(video, sessionId, frameEndpoint);
+                        }
+                    } finally {
+                        if (sessionId === scanSession) scanDetectorBusy = false;
+                    }
+                }, 250);
+                setTimeout(() => {
+                    if (sessionId !== scanSession || !scanStream) return;
+                    if (scanInterval) { clearInterval(scanInterval); scanInterval = null; }
+                    startServerFrameScanner(video, sessionId, frameEndpoint);
+                }, 1800);
+                return;
+            } catch (err) {
+                startServerFrameScanner(video, sessionId, frameEndpoint);
+                return;
+            }
         }
+
+        startServerFrameScanner(video, sessionId, frameEndpoint);
     } catch (err) {
-        showError('Tidak dapat mengakses kamera.');
+        stopScan();
+        showError(cameraErrorMessage(err));
     }
 }
 
 function stopScan() {
+    scanSession += 1;
+    scanRequestBusy = false;
+    scanDetectorBusy = false;
     if (scanStream) { scanStream.getTracks().forEach(t => t.stop()); scanStream = null; }
     if (scanInterval) { clearInterval(scanInterval); scanInterval = null; }
     const video = document.getElementById('scanVideo');
     if (video) { video.srcObject = null; video.classList.add('hidden'); }
     document.getElementById('scanIdle')?.classList.remove('hidden');
     document.getElementById('btnStartScan')?.classList.remove('hidden');
+    document.getElementById('btnFocusCamera')?.classList.add('hidden');
     document.getElementById('btnStopScan')?.classList.add('hidden');
 }
 
@@ -353,17 +678,15 @@ function buildHistoryBlock(history) {
 }
 
 function showSuccess(data) {
-    const isAdmin = {{ auth()->user()->isAdmin() ? 'true' : 'false' }};
-    const isSuperAdmin = {{ auth()->user()->isSuperAdmin() ? 'true' : 'false' }};
     const editUrl = '{{ url("/admin/certificates") }}/' + data.id + '/edit';
     const deleteUrl = '{{ url("/admin/certificates") }}/' + data.id;
     const csrfToken = CSRF;
 
     let actionButtons = '';
-    if (isAdmin || isSuperAdmin) {
+    if (data.can_edit) {
         actionButtons += `<a href="${editUrl}" class="inline-flex items-center px-4 py-2 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 text-sm font-medium">Edit Sertifikat</a>`;
     }
-    if (isSuperAdmin) {
+    if (data.can_delete) {
         actionButtons += `
             <form method="POST" action="${deleteUrl}" class="js-delete-certificate inline">
                 <input type="hidden" name="_token" value="${csrfToken}">
@@ -412,7 +735,7 @@ function showSuccess(data) {
 function showError(message) {
     const el = document.getElementById('result');
     el.className = 'mt-8 p-6 rounded-xl bg-red-50 border border-red-200';
-    el.innerHTML = `<div><h3 class="text-xl font-bold text-red-900 mb-1">Sertifikat Tidak Ditemukan</h3><p class="text-red-700 text-sm">${message}</p></div>`;
+    el.innerHTML = `<div><h3 class="text-xl font-bold text-red-900 mb-1">Verifikasi Gagal</h3><p class="text-red-700 text-sm">${message}</p></div>`;
     el.classList.remove('hidden');
 }
 </script>

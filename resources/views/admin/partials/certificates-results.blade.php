@@ -71,9 +71,10 @@
         <tbody class="divide-y divide-gray-200">
             @forelse($certificates as $cert)
             @php
-                $isOwner = $cert->created_by === auth()->id();
-                $canEdit = auth()->user()->isAdmin() && !auth()->user()->isSuperAdmin();
-                $canDelete = auth()->user()->isAdmin() && !auth()->user()->isSuperAdmin();
+                $user = auth()->user();
+                $isOwner = (int) $cert->created_by === (int) auth()->id();
+                $canEdit = $user->isSuperAdmin() || ($user->isAdmin() && $isOwner);
+                $canDelete = $user->isSuperAdmin();
             @endphp
             <tr class="hover:bg-gray-50 {{ !$isOwner ? 'opacity-90' : '' }}">
                 <td class="px-6 py-4 text-sm font-medium text-gray-900">
@@ -112,7 +113,7 @@
                             Edit
                         </a>
                         @else
-                        <span class="inline-flex items-center rounded-lg border border-gray-200 bg-gray-100 px-3 py-1.5 text-xs font-semibold text-gray-400 cursor-not-allowed" title="Anda tidak memiliki akses edit">
+                        <span class="inline-flex items-center rounded-lg border border-gray-200 bg-gray-100 px-3 py-1.5 text-xs font-semibold text-gray-400 cursor-not-allowed" title="Admin hanya dapat mengedit sertifikat yang diupload sendiri">
                             Edit
                         </span>
                         @endif

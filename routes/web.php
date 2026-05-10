@@ -10,6 +10,7 @@ use App\Http\Controllers\UserController;
 Route::get('/', [CertificateController::class, 'index'])->name('home');
 Route::post('/verify', [CertificateController::class, 'verify'])->middleware('throttle:verify')->name('verify');
 Route::post('/verify-qr', [CertificateController::class, 'verifyQr'])->middleware('throttle:verify-qr')->name('verify.qr');
+Route::post('/verify-qr-frame', [CertificateController::class, 'verifyQr'])->middleware('throttle:verify-qr-frame')->name('verify.qr.frame');
 
 // Auth Routes
 Route::get('/login', [AuthController::class, 'showLogin'])->name('login');
@@ -25,7 +26,7 @@ Route::middleware(['auth', 'role:superadmin,admin'])->group(function () {
     Route::post('/admin/verify-qr', [CertificateController::class, 'verifyQrForAdmin'])->name('admin.verify.qr');
 });
 
-// Admin only — upload & edit sertifikat
+// Superadmin & Admin — upload dan edit; akses sertifikat difilter di controller
 Route::middleware(['auth', 'role:superadmin,admin'])->group(function () {
     Route::get('/admin/upload', [AdminController::class, 'showUpload'])->name('admin.upload');
     Route::post('/admin/upload', [AdminController::class, 'upload'])->name('admin.upload.post');

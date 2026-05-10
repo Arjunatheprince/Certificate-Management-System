@@ -5,31 +5,32 @@ namespace App\Http\Controllers;
 use App\Models\User;
 use App\Models\ActivityLog;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 
 class UserController extends Controller
 {
     public function index()
     {
-        $users = User::orderBy('id')->get();
+        $users = User::orderBy('id', 'asc')->get();
         return view('admin.users.index', compact('users'));
     }
 
     public function show(User $user)
     {
-        $logs = ActivityLog::where('user_id', $user->id)
+        $logs = ActivityLog::where('user_id', '=', $user->id, 'and')
             ->orderBy('id', 'desc')
             ->paginate(15);
 
         // Statistik per aksi
-        $stats = ActivityLog::where('user_id', $user->id)
+        $stats = ActivityLog::where('user_id', '=', $user->id, 'and')
             ->selectRaw('action, count(*) as total')
             ->groupBy('action')
             ->pluck('total', 'action');
 
         // Sertifikat yang di-upload oleh user ini (via created_by)
         $certificates = \App\Models\Certificate::with('student')
-            ->where('created_by', $user->id)
+            ->where('created_by', '=', $user->id, 'and')
             ->orderBy('id', 'desc')
             ->get();
 
@@ -82,7 +83,7 @@ class UserController extends Controller
         }
 
         // Prevent demoting self
-        if ($user->id === auth()->id() && $request->role !== 'superadmin') {
+        if ($user->id === Auth::id() && $request->role !== 'superadmin') {
             return back()->withErrors(['role' => 'Anda tidak dapat mengubah role diri sendiri.']);
         }
 
@@ -106,12 +107,12 @@ class UserController extends Controller
 
     public function destroy(User $user)
     {
-        if ($user->id === auth()->id()) {
+        if ($user->id === Auth::id()) {
             return back()->withErrors(['error' => 'Anda tidak dapat menghapus akun sendiri.']);
         }
 
         ActivityLog::record('delete_user', $user->email, "Menghapus user {$user->name} ({$user->role_label})");
-        $user->delete();
+        User::destroy($user->id);
 
         return redirect()->route('admin.users.index')->with('success', "User berhasil dihapus.");
     }
