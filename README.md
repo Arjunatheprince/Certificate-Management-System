@@ -2,14 +2,6 @@
 
 Repository ini berisi aplikasi web untuk pengelolaan dan verifikasi sertifikat digital. Sistem dibangun dengan Laravel, QR Code, SHA-256, dan Role Based Access Control (RBAC).
 
-## Tautan Repository
-
-GitHub:
-
-https://github.com/Arjunatheprince/certificate-system---Copy
-
-Catatan untuk penilaian: repository perlu dibuat public. Jika repository tetap private, akun dosen atau penguji harus diberi akses baca terlebih dahulu.
-
 ## Fitur Utama
 
 - Login admin dengan validasi akun aktif.
